@@ -119,6 +119,15 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	return nil
 }
 
+var (
+	myScheme = runtime.NewScheme()
+)
+
+func init() {
+	_ = AddToScheme(myScheme)
+	_ = scheme.AddToScheme(myScheme)
+}
+
 func getClientConfig() (*rest.Config, error) {
 	// Try in-cluster config first
 	config, err := rest.InClusterConfig()
@@ -153,17 +162,6 @@ func main() {
 		panic(fmt.Sprintf("Failed to get Kubernetes config: %v", err))
 	}
 
-	// Create a new scheme and add the TrinoBackend types
-	myScheme := runtime.NewScheme()
-	if err := AddToScheme(myScheme); err != nil {
-		panic(err.Error())
-	}
-
-	// Add the Kubernetes core types to the scheme
-	if err := scheme.AddToScheme(myScheme); err != nil {
-		panic(err.Error())
-	}
-
 	// Create a dynamic client
 	dynamicClient, err := dynamic.NewForConfig(config)
 	if err != nil {
@@ -173,7 +171,9 @@ func main() {
 	crdConfig := *config
 	crdConfig.GroupVersion = &SchemeGroupVersion
 	crdConfig.APIPath = "/apis"
-	crdConfig.NegotiatedSerializer = runtime.NewSimpleNegotiatedSerializer(runtime.SerializerInfo{})
+	// crdConfig.NegotiatedSerializer = serializer.NewCodecFactory(myScheme)
+	crdConfig.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
+
 	crdConfig.UserAgent = rest.DefaultKubernetesUserAgent()
 
 	restClient, err := rest.RESTClientFor(&crdConfig)
@@ -332,15 +332,14 @@ func processItem(key string, dynamicClient dynamic.Interface) error {
 	}
 
 	// Get the TrinoBackend resource
-	trinoBackend, err := dynamicClient.Resource(SchemeGroupVersion.WithResource("trinobackends")).
-		Namespace(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	gvr := SchemeGroupVersion.WithResource("trinobackends")
+	unstructured, err := dynamicClient.Resource(gvr).Namespace(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get TrinoBackend: %v", err)
 	}
 
-	// Convert the unstructured.Unstructured to our TrinoBackend type
 	var backend TrinoBackend
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(trinoBackend.UnstructuredContent(), &backend)
+	err = runtime.DefaultUnstructuredConverter.FromUnstructured(unstructured.UnstructuredContent(), &backend)
 	if err != nil {
 		return fmt.Errorf("failed to convert unstructured to TrinoBackend: %v", err)
 	}

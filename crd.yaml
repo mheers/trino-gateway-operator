@@ -25,6 +25,11 @@ spec:
                   type: string
                 externalUrl:
                   type: string
+              required:
+                - name
+                - proxyTo
+                - active
+                - routingGroup
   scope: Namespaced
   names:
     plural: trinobackends
