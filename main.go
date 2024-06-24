@@ -12,9 +12,10 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -175,54 +176,57 @@ func main() {
 	crdConfig.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
 
 	crdConfig.UserAgent = rest.DefaultKubernetesUserAgent()
-
-	restClient, err := rest.RESTClientFor(&crdConfig)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	// Create a new ListWatch
-	listWatch := cache.NewListWatchFromClient(
-		restClient,
-		"trinobackends",
-		metav1.NamespaceAll,
-		fields.Everything(),
-	)
+	// Define the GroupVersionResource
+	gvr := SchemeGroupVersion.WithResource("trinobackends")
 
 	// Create a new queue
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 
+	// Create custom ListFunc and WatchFunc
+	listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
+		return dynamicClient.Resource(gvr).Namespace(metav1.NamespaceAll).List(context.TODO(), options)
+	}
+
+	watchFunc := func(options metav1.ListOptions) (watch.Interface, error) {
+		return dynamicClient.Resource(gvr).Namespace(metav1.NamespaceAll).Watch(context.TODO(), options)
+	}
+
 	// Create a new informer
-	_, controller := cache.NewInformer(
-		listWatch,
-		&TrinoBackend{},
-		0,
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				key, err := cache.MetaNamespaceKeyFunc(obj)
-				if err == nil {
-					queue.Add(key)
-				}
-			},
-			UpdateFunc: func(old interface{}, new interface{}) {
-				key, err := cache.MetaNamespaceKeyFunc(new)
-				if err == nil {
-					queue.Add(key)
-				}
-			},
-			DeleteFunc: func(obj interface{}) {
-				key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
-				if err == nil {
-					queue.Add(key)
-				}
-			},
+	indexInformer := cache.NewSharedIndexInformer(
+		&cache.ListWatch{
+			ListFunc:  listFunc,
+			WatchFunc: watchFunc,
 		},
+		&unstructured.Unstructured{},
+		0, // resync period
+		cache.Indexers{},
 	)
+
+	indexInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			key, err := cache.MetaNamespaceKeyFunc(obj)
+			if err == nil {
+				queue.Add(key)
+			}
+		},
+		UpdateFunc: func(old interface{}, new interface{}) {
+			key, err := cache.MetaNamespaceKeyFunc(new)
+			if err == nil {
+				queue.Add(key)
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+			if err == nil {
+				queue.Add(key)
+			}
+		},
+	})
 
 	// Start the controller
 	stop := make(chan struct{})
 	defer close(stop)
-	go controller.Run(stop)
+	go indexInformer.Run(stop)
 
 	// Start the queue processing
 	for {

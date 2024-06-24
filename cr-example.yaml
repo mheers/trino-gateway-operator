@@ -1,0 +1,10 @@
+apiVersion: trino.example.com/v1
+kind: TrinoBackend
+metadata:
+  name: example-trinobackend
+spec:
+  name: example-backend
+  proxyTo: http://example-proxy-to
+  active: true
+  routingGroup: default
+  externalUrl: http://example-external-url
