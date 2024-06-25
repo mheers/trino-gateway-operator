@@ -51,6 +51,12 @@ var (
 	log = logrus.New()
 )
 
+var (
+	gatewayAPIBaseURL = "https://query-trinogateway.cluster.local" // Replace with your Trino Gateway API URL
+	gatewayUsername   = "trino-gateway"                            // Replace with your actual username
+	gatewayPassword   = "test"                                     // Replace with your actual password
+)
+
 func init() {
 	_ = AddToScheme(myScheme)
 	_ = scheme.AddToScheme(myScheme)
@@ -60,6 +66,23 @@ func init() {
 	log.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
+
+	// API_PASSWORD
+	// API_URL
+	// API_USER
+
+	// replace gateway config with env vars if set
+	if os.Getenv("API_URL") != "" {
+		gatewayAPIBaseURL = os.Getenv("API_URL")
+	}
+
+	if os.Getenv("API_USER") != "" {
+		gatewayUsername = os.Getenv("API_USER")
+	}
+
+	if os.Getenv("API_PASSWORD") != "" {
+		gatewayPassword = os.Getenv("API_PASSWORD")
+	}
 }
 
 func getClientConfig() (*rest.Config, error) {
@@ -181,12 +204,6 @@ func main() {
 	}
 
 }
-
-const (
-	gatewayAPIBaseURL = "https://query-trinogateway.cluster.local" // Replace with your Trino Gateway API URL
-	gatewayUsername   = "trino-gateway"                            // Replace with your actual username
-	gatewayPassword   = "test"                                     // Replace with your actual password
-)
 
 func createHTTPClientWithBasicAuth() *http.Client {
 	return &http.Client{
