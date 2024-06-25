@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -125,9 +126,19 @@ var (
 	myScheme = runtime.NewScheme()
 )
 
+var (
+	log = logrus.New()
+)
+
 func init() {
 	_ = AddToScheme(myScheme)
 	_ = scheme.AddToScheme(myScheme)
+
+	// Configure logrus
+	log.SetLevel(logrus.DebugLevel)
+	log.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
 }
 
 func getClientConfig() (*rest.Config, error) {
@@ -158,16 +169,18 @@ func getClientConfig() (*rest.Config, error) {
 }
 
 func main() {
+	log.Debug("Starting the Trino Backend operator")
+
 	// Set up Kubernetes client configuration
 	config, err := getClientConfig()
 	if err != nil {
-		panic(fmt.Sprintf("Failed to get Kubernetes config: %v", err))
+		log.Fatalf("Failed to get Kubernetes config: %v", err)
 	}
 
 	// Create a dynamic client
 	dynamicClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		panic(err.Error())
+		log.Fatalf("Failed to create dynamic client: %v", err)
 	}
 	// Create a new RESTClient for our custom resources
 	crdConfig := *config
@@ -229,15 +242,19 @@ func main() {
 	defer close(stop)
 	go indexInformer.Run(stop)
 
+	log.Info("Starting to process items from the queue")
+
 	// Start the queue processing
 	for {
 		key, quit := queue.Get()
 		if quit {
+			log.Info("Received quit signal, shutting down")
 			return
 		}
+		log.Debugf("Processing item: %s", key)
 		err := processItem(key.(string), dynamicClient)
 		if err != nil {
-			fmt.Printf("Error processing item: %v\n", err)
+			log.Errorf("Error processing item: %v", err)
 		}
 		queue.Done(key)
 	}
@@ -264,6 +281,8 @@ func addBasicAuth(req *http.Request) {
 }
 
 func createOrUpdateBackend(backend TrinoBackend) error {
+	log.Debugf("Creating or updating backend: %s", backend.Spec.Name)
+
 	url := fmt.Sprintf("%s/entity?entityType=GATEWAY_BACKEND", gatewayAPIBaseURL)
 
 	payload := map[string]interface{}{
@@ -304,7 +323,10 @@ func createOrUpdateBackend(backend TrinoBackend) error {
 	return nil
 }
 
+// TODO: not working yet. Even curl does not work: curl -X POST -d "example-trinobackend" "https://query-trinogateway.cluster.local/gateway/backend/modify/delete" -vvv -u trino-gateway:test; it returns a 200 OK but does not delete the backend
 func deleteBackend(name string) error {
+	log.Debugf("Deleting backend: %s", name)
+
 	url := fmt.Sprintf("%s/gateway/backend/modify/delete", gatewayAPIBaseURL)
 
 	req, err := http.NewRequest("POST", url, strings.NewReader(name))
@@ -322,8 +344,12 @@ func deleteBackend(name string) error {
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %v", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to delete backend, status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
@@ -331,6 +357,8 @@ func deleteBackend(name string) error {
 }
 
 func processItem(key string, dynamicClient dynamic.Interface) error {
+	log.Debugf("Processing item: %s", key)
+
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return fmt.Errorf("invalid resource key: %s", key)
@@ -342,7 +370,7 @@ func processItem(key string, dynamicClient dynamic.Interface) error {
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// The resource was not found, which likely means it was deleted
-			fmt.Printf("TrinoBackend %s/%s not found, assuming it's been deleted\n", namespace, name)
+			log.Infof("TrinoBackend %s/%s not found, assuming it's been deleted", namespace, name)
 			return deleteBackend(name)
 		}
 		return fmt.Errorf("failed to get TrinoBackend: %v", err)
@@ -357,9 +385,11 @@ func processItem(key string, dynamicClient dynamic.Interface) error {
 	// Process the TrinoBackend based on its state
 	if backend.ObjectMeta.DeletionTimestamp != nil {
 		// The resource is being deleted
+		log.Debugf("TrinoBackend %s/%s is being deleted", namespace, name)
 		return deleteBackend(backend.Spec.Name)
 	}
 
 	// The resource is being created or updated
+	log.Debugf("Creating or updating TrinoBackend %s/%s", namespace, name)
 	return createOrUpdateBackend(backend)
 }
