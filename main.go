@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -244,9 +245,9 @@ func main() {
 }
 
 const (
-	gatewayAPIBaseURL = "http://localhost:8080" // Replace with your Trino Gateway API URL
-	gatewayUsername   = "your_username"         // Replace with your actual username
-	gatewayPassword   = "your_password"         // Replace with your actual password
+	gatewayAPIBaseURL = "https://query-trinogateway.cluster.local" // Replace with your Trino Gateway API URL
+	gatewayUsername   = "trino-gateway"                            // Replace with your actual username
+	gatewayPassword   = "test"                                     // Replace with your actual password
 )
 
 func createHTTPClientWithBasicAuth() *http.Client {
@@ -339,6 +340,11 @@ func processItem(key string, dynamicClient dynamic.Interface) error {
 	gvr := SchemeGroupVersion.WithResource("trinobackends")
 	unstructured, err := dynamicClient.Resource(gvr).Namespace(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
+		if errors.IsNotFound(err) {
+			// The resource was not found, which likely means it was deleted
+			fmt.Printf("TrinoBackend %s/%s not found, assuming it's been deleted\n", namespace, name)
+			return deleteBackend(name)
+		}
 		return fmt.Errorf("failed to get TrinoBackend: %v", err)
 	}
 
